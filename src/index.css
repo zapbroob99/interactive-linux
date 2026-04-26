@@ -1,0 +1,35 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --bg-main: #020617;
+  --bg-card: #0f172a;
+  --accent: #3b82f6;
+  --border: rgba(255, 255, 255, 0.08);
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-main);
+  color: #f8fafc;
+  font-family: 'Plus Jakarta Sans', sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Modern Scrollbar */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+/* Task Tamamlama Animasyonu */
+@keyframes checkPop {
+  0% { transform: scale(0.8); }
+  50% { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.task-completed {
+  animation: checkPop 0.4s ease-out;
+  border-color: #10b981 !important;
+  background: rgba(16, 185, 129, 0.05) !important;
+}
