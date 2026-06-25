@@ -1,5 +1,3 @@
-import React from 'react';
-
 const TerminalWindow = ({ terminalRef, isRunning }) => {
   return (
     <div style={{
@@ -15,7 +13,7 @@ const TerminalWindow = ({ terminalRef, isRunning }) => {
           <div style={{ width: '11px', height: '11px', borderRadius: '50%', background: '#27c93f' }} />
         </div>
         <div style={{ flex: 1, textAlign: 'center', color: '#94a3b8', fontSize: '11px', fontWeight: '800', fontFamily: 'monospace', letterSpacing: '1px' }}>
-          TERMINAL — ZSH
+          TERMINAL - BASH
         </div>
         <div style={{ width: '60px' }} />
       </div>
@@ -23,8 +21,8 @@ const TerminalWindow = ({ terminalRef, isRunning }) => {
       <div style={{ flex: 1, padding: '20px', position: 'relative' }}>
         {!isRunning && (
           <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: '#475569' }}>
-            <div style={{ fontSize: '32px', marginBottom: '10px' }}>💿</div>
-            <p style={{ fontSize: '13px', fontWeight: '500' }}>Sistem başlatılmayı bekliyor...</p>
+            <div style={{ fontSize: '32px', marginBottom: '10px' }}>...</div>
+            <p style={{ fontSize: '13px', fontWeight: '500' }}>Waiting for the lab system to start...</p>
           </div>
         )}
         <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />

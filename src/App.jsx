@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Terminal } from 'xterm';
 import { V86 } from 'v86';
 import Markdown from 'markdown-to-jsx';
@@ -8,12 +8,13 @@ import 'xterm/css/xterm.css';
 
 function App() {
   const terminalRef = useRef(null);
-  const xtermInstance = useRef(null);
+  const lessonPanelRef = useRef(null);
+  const sidebarNavRef = useRef(null);
   const emulatorRef = useRef(null);
   const isSettingUpRef = useRef(false);
-  const keyboardBuffer = useRef(""); 
-  const lastRealCommand = useRef(""); 
-  const screenBuffer = useRef(""); 
+  const keyboardBuffer = useRef('');
+  const lastRealCommand = useRef('');
+  const screenBuffer = useRef('');
 
   const [theme, setTheme] = useState('dark');
   const [isSystemReady, setIsSystemReady] = useState(false);
@@ -22,23 +23,28 @@ function App() {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [contentWidth, setContentWidth] = useState(480);
 
-  const flatModules = sections.flatMap(s => s.items);
-  const activeModule = flatModules.find(m => m.id === activeId);
-  const nextModule = flatModules[flatModules.findIndex(m => m.id === activeId) + 1];
-  const allTasksCompleted = activeModule?.tasks.every(t => t.completed);
+  const flatModules = sections.flatMap(section => section.items);
+  const activeModule = flatModules.find(module => module.id === activeId);
 
-  const colors = {
-    dark: { bg: '#0a0f1e', sidebar: '#0f172a', border: '#1e293b', text: '#f8fafc', subtext: '#94a3b8', taskBg: '#1e293b', accent: '#6366f1', termOuter: '#020617', success: '#10b981' },
-    light: { bg: '#ffffff', sidebar: '#f8fafc', border: '#e2e8f0', text: '#0f172a', subtext: '#64748b', taskBg: '#f1f5f9', accent: '#4f46e5', termOuter: '#f8fafc', success: '#059669' }
-  }[theme];
+  const getCleanScreen = useCallback(() => {
+    const escapeChar = String.fromCharCode(27);
+    const ansiPattern = new RegExp(`${escapeChar}\\[[0-9;]*[JKmsu]`, 'g');
+    return screenBuffer.current
+      .replace(ansiPattern, '')
+      .split('')
+      .filter(char => {
+        const code = char.charCodeAt(0);
+        return code > 31 && (code < 127 || code > 159);
+      })
+      .join('');
+  }, []);
 
-  const getCleanScreen = () => screenBuffer.current.replace(/[\x00-\x1F\x7F-\x9F\x1B\[[0-9;]*[JKmsu]/g, '');
-
-  const executeCommand = async (cmd) => {
+  const executeCommand = useCallback(async (cmd) => {
     if (!emulatorRef.current) return;
+
     return new Promise((resolve) => {
       setTimeout(() => {
-        emulatorRef.current.serial0_send(cmd + '\n');
+        emulatorRef.current.serial0_send(`${cmd}\n`);
         let attempts = 0;
         const check = setInterval(() => {
           const lastPart = getCleanScreen().slice(-20);
@@ -46,32 +52,35 @@ function App() {
             clearInterval(check);
             resolve();
           }
-          if (++attempts > 20) { clearInterval(check); resolve(); }
+          if (++attempts > 20) {
+            clearInterval(check);
+            resolve();
+          }
         }, 100);
       }, 100);
     });
-  };
+  }, [getCleanScreen]);
 
   const startEmulator = useCallback(async (moduleId) => {
     if (isSettingUpRef.current) return;
     isSettingUpRef.current = true;
 
-    if (emulatorRef.current) { 
-      emulatorRef.current.destroy(); 
+    if (emulatorRef.current) {
+      emulatorRef.current.destroy();
     }
-    
+
     setIsSystemReady(false);
-    screenBuffer.current = "";
-    keyboardBuffer.current = "";
-    lastRealCommand.current = "";
+    screenBuffer.current = '';
+    keyboardBuffer.current = '';
+    lastRealCommand.current = '';
 
     const v86Config = {
       wasm_path: '/bin/v86.wasm',
       bios: { url: '/bin/seabios.bin' },
       vga_bios: { url: '/bin/vgabios.bin' },
-      initial_state: { url: '/bin/v86state.bin' }, 
+      initial_state: { url: '/bin/v86state.bin' },
       autostart: true,
-      memory_size: 512 * 1024 * 1024, 
+      memory_size: 512 * 1024 * 1024,
       serial_container_xtermjs: terminalRef.current,
       serial_console: { xterm_lib: Terminal },
     };
@@ -79,9 +88,9 @@ function App() {
     try {
       const emulator = new V86(v86Config);
       emulatorRef.current = emulator;
-      window.emulator = emulator; 
-      
-      emulator.add_listener("serial0-output-byte", (byte) => {
+      window.emulator = emulator;
+
+      emulator.add_listener('serial0-output-byte', (byte) => {
         screenBuffer.current += String.fromCharCode(byte);
       });
 
@@ -89,21 +98,19 @@ function App() {
       const poll = setInterval(async () => {
         pollCount++;
         const term = emulator.serial_adapter?.term;
-        
+
         if (term || pollCount > 50) {
           clearInterval(poll);
           if (!term) {
-             console.error("Terminal adapter yüklenemedi!");
-             return;
+            console.error('Terminal adapter failed to load.');
+            return;
           }
-          xtermInstance.current = term;
-          term.focus();
 
           term.onData(data => {
             if (data === '\r') {
               const cmd = keyboardBuffer.current.trim();
               if (cmd) lastRealCommand.current = cmd;
-              keyboardBuffer.current = "";
+              keyboardBuffer.current = '';
             } else if (data === '\u007f') {
               keyboardBuffer.current = keyboardBuffer.current.slice(0, -1);
             } else if (data.length === 1 && data.charCodeAt(0) >= 32) {
@@ -111,48 +118,47 @@ function App() {
             }
           });
 
-          // Prompt bekleme döngüsü
+          // Wait until the restored VM exposes a usable shell prompt.
           let waitAttempts = 0;
           const waitForPrompt = setInterval(async () => {
             waitAttempts++;
             const clean = getCleanScreen();
-            
-            // Eğer 3 saniye geçtiyse ve hala hazır değilse, sistemi uyandırmak için enter gönder
+
             if (waitAttempts === 3) {
-                emulator.serial0_send('\n');
+              emulator.serial0_send('\n');
             }
 
             if (clean.includes('$') || clean.includes('#') || clean.includes('~') || clean.includes('login:')) {
-                clearInterval(waitForPrompt);
-                
-                if (clean.includes('login:')) {
-                    await executeCommand('root');
-                }
+              clearInterval(waitForPrompt);
 
-                // Modül bazlı setup komutları (opsiyonel)
-                const targetMod = initialSections.flatMap(s => s.items).find(m => m.id === moduleId);
-                if (targetMod?.setupCommands) {
-                    for (const cmd of targetMod.setupCommands) { await executeCommand(cmd); }
+              if (clean.includes('login:')) {
+                await executeCommand('root');
+              }
+
+              const targetMod = initialSections.flatMap(section => section.items).find(module => module.id === moduleId);
+              if (targetMod?.setupCommands) {
+                for (const cmd of targetMod.setupCommands) {
+                  await executeCommand(cmd);
                 }
-                
-                setIsSystemReady(true);
-                isSettingUpRef.current = false;
-                console.log("Sistem hazır!");
+              }
+
+              setIsSystemReady(true);
+              isSettingUpRef.current = false;
+              console.log('System ready.');
             }
-            
-            if (waitAttempts > 100) { // 100 saniye timeout
-                clearInterval(waitForPrompt);
-                console.error("Sistem zaman aşımına uğradı.");
+
+            if (waitAttempts > 100) {
+              clearInterval(waitForPrompt);
+              console.error('System timed out while waiting for the shell prompt.');
             }
           }, 1000);
         }
       }, 200);
-
-    } catch (e) { 
-      console.error("V86 Crash:", e);
+    } catch (error) {
+      console.error('V86 crash:', error);
       isSettingUpRef.current = false;
     }
-  }, []);
+  }, [executeCommand, getCleanScreen]);
 
   useEffect(() => {
     startEmulator(activeId);
@@ -167,65 +173,130 @@ function App() {
       setSections(prev => {
         const newSections = JSON.parse(JSON.stringify(prev));
         let updated = false;
+
         newSections.forEach(section => {
-          section.items.forEach(mod => {
-            if (mod.id === activeId) {
-              const taskIdx = mod.tasks.findIndex(t => !t.completed);
+          section.items.forEach(module => {
+            if (module.id === activeId) {
+              const taskIdx = module.tasks.findIndex(task => !task.completed);
               if (taskIdx !== -1) {
-                const task = mod.tasks[taskIdx];
+                const task = module.tasks[taskIdx];
                 const trigger = task.trigger.toLowerCase().trim();
                 let success = false;
-                if (task.checkType === "input" && submitted === trigger) success = true;
-                else if (task.checkType === "output" && cleanScreen.includes(trigger)) success = true;
+
+                if (task.checkType === 'input' && submitted === trigger) success = true;
+                else if (task.checkType === 'output' && cleanScreen.includes(trigger)) success = true;
+
                 if (success) {
-                  mod.tasks[taskIdx].completed = true;
-                  lastRealCommand.current = ""; 
+                  module.tasks[taskIdx].completed = true;
+                  lastRealCommand.current = '';
                   updated = true;
                 }
               }
             }
           });
         });
+
         return updated ? newSections : prev;
       });
     }, 400);
-    return () => clearInterval(scan);
-  }, [activeId, isSystemReady]);
 
-  const handleModuleSwitch = (id) => { if (isSystemReady && id !== activeId) setActiveId(id); };
-  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
-  const startResizing = (e) => {
-    const move = (me) => {
-      const nw = me.clientX - (isSidebarOpen ? 280 : 80);
-      if (nw > 350 && nw < 800) setContentWidth(nw);
-    };
-    const up = () => { window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); };
-    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+    return () => clearInterval(scan);
+  }, [activeId, getCleanScreen, isSystemReady]);
+
+  const handleModuleSwitch = (id) => {
+    if (isSystemReady && id !== activeId) setActiveId(id);
   };
 
- return (
-    <div style={{ display: 'flex', width: '100vw', height: '100vh', backgroundColor: colors.bg, color: colors.text, fontFamily: '"Plus Jakarta Sans", sans-serif', overflow: 'hidden', transition: 'background-color 0.3s' }}>
-      
-      {/* SIDEBAR */}
-      <aside style={{ width: isSidebarOpen ? 280 : 80, backgroundColor: colors.sidebar, borderRight: `1px solid ${colors.border}`, display: 'flex', flexDirection: 'column', transition: '0.4s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-        <div style={{ padding: '40px 24px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+  const toggleTheme = () => setTheme(prev => prev === 'dark' ? 'light' : 'dark');
+
+  const scrollElementByWheel = useCallback((event, element) => {
+    if (!element) return;
+
+    const maxScrollTop = element.scrollHeight - element.clientHeight;
+    if (maxScrollTop <= 0) return;
+
+    const nextScrollTop = Math.max(0, Math.min(maxScrollTop, element.scrollTop + event.deltaY));
+    if (nextScrollTop === element.scrollTop) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    element.scrollTop = nextScrollTop;
+  }, []);
+
+  const handleLessonWheel = useCallback((event) => {
+    scrollElementByWheel(event, lessonPanelRef.current);
+  }, [scrollElementByWheel]);
+
+  const handleSidebarWheel = useCallback((event) => {
+    scrollElementByWheel(event, sidebarNavRef.current);
+  }, [scrollElementByWheel]);
+
+  const startResizing = () => {
+    const move = (event) => {
+      const nextWidth = event.clientX - (isSidebarOpen ? 280 : 80);
+      if (nextWidth > 350 && nextWidth < 800) setContentWidth(nextWidth);
+    };
+
+    const up = () => {
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+    };
+
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  };
+
+  const currentColors = theme === 'dark' ? {
+    bg: '#020617',
+    sidebar: '#0f172a',
+    text: '#f8fafc',
+    accent: '#3b82f6',
+    border: 'rgba(255, 255, 255, 0.08)',
+    subtext: '#94a3b8',
+    accentBg: 'rgba(59, 130, 246, 0.1)',
+  } : {
+    bg: '#ffffff',
+    sidebar: '#f4f4f4',
+    text: '#000000',
+    accent: '#2563eb',
+    border: '#e2e8f0',
+    subtext: '#64748b',
+    accentBg: 'rgba(37, 99, 235, 0.1)',
+  };
+
+  const iconLineStyle = {
+    width: '14px',
+    height: '2px',
+    borderRadius: '999px',
+    backgroundColor: currentColors.subtext,
+    display: 'block',
+  };
+
+  return (
+    <div style={{ display: 'flex', width: '100vw', height: '100vh', backgroundColor: currentColors.bg, color: currentColors.text, fontFamily: '"Plus Jakarta Sans", sans-serif', overflow: 'hidden', transition: 'background-color 0.3s' }}>
+      <aside style={{ width: isSidebarOpen ? 280 : 80, minWidth: isSidebarOpen ? 280 : 80, minHeight: 0, backgroundColor: currentColors.sidebar, borderRight: `1px solid ${currentColors.border}`, display: 'flex', flexDirection: 'column', transition: '0.4s cubic-bezier(0.4, 0, 0.2, 1)' }}>
+        <div style={{ padding: isSidebarOpen ? '32px 18px 24px' : '32px 20px 24px', display: 'flex', justifyContent: isSidebarOpen ? 'space-between' : 'center', alignItems: 'center', gap: '12px', flexShrink: 0 }}>
           {isSidebarOpen && (
-            <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: '18px' }}>
-              <span style={{ color: colors.subtext, fontWeight: '400' }}>INTERACTIVE</span>
-              <span style={{ color: colors.accent, fontWeight: '800', marginLeft: '4px' }}>LINUX</span>
-              <span className="cursor-blink" style={{ color: colors.accent }}>_</span>
+            <div style={{ fontFamily: '"JetBrains Mono", monospace', fontSize: '17px', display: 'flex', alignItems: 'baseline', flexWrap: 'nowrap', whiteSpace: 'nowrap', minWidth: 0 }}>
+              <span style={{ color: currentColors.subtext, fontWeight: '400' }}>INTERACTIVE</span>
+              <span style={{ color: currentColors.accent, fontWeight: '800', marginLeft: '4px' }}>LINUX</span>
+              <span className="cursor-blink" style={{ color: currentColors.accent, flexShrink: 0 }}>_</span>
             </div>
           )}
-          <button onClick={() => setIsSidebarOpen(!isSidebarOpen)} style={{ background: 'none', border: 'none', color: colors.subtext, cursor: 'pointer', fontSize: '18px' }}>☰</button>
+          <button aria-label="Toggle lesson navigation" onClick={() => setIsSidebarOpen(!isSidebarOpen)} title="Toggle navigation" style={{ width: '34px', height: '34px', flex: '0 0 34px', display: 'inline-flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '4px', background: currentColors.accentBg, border: `1px solid ${currentColors.border}`, borderRadius: '8px', cursor: 'pointer', padding: 0 }}>
+            <span style={iconLineStyle} />
+            <span style={iconLineStyle} />
+            <span style={iconLineStyle} />
+          </button>
         </div>
 
-        <nav style={{ flex: 1, padding: '0 12px', overflowY: 'auto', display: isSidebarOpen ? 'block' : 'none' }}>
+        <nav ref={sidebarNavRef} onWheelCapture={handleSidebarWheel} style={{ flex: '1 1 auto', minHeight: 0, padding: '0 12px 24px', overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain', display: isSidebarOpen ? 'block' : 'none' }}>
           {sections.map(section => (
             <div key={section.title} style={{ marginBottom: '24px' }}>
-              <h4 style={{ fontSize: '11px', fontWeight: '800', color: colors.subtext, textTransform: 'uppercase', letterSpacing: '1.2px', padding: '0 16px', marginBottom: '12px' }}>{section.title}</h4>
-              {section.items.map(mod => (
-                <div key={mod.id} onClick={() => handleModuleSwitch(mod.id)} style={{ padding: '12px 16px', borderRadius: '12px', marginBottom: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: activeId === mod.id ? '700' : '500', backgroundColor: activeId === mod.id ? `${colors.accent}15` : 'transparent', color: activeId === mod.id ? colors.accent : colors.subtext, transition: '0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-                  {mod.title}
+              <h4 style={{ fontSize: '11px', fontWeight: '800', color: currentColors.subtext, textTransform: 'uppercase', letterSpacing: '1.2px', padding: '0 16px', marginBottom: '12px' }}>{section.title}</h4>
+              {section.items.map(module => (
+                <div key={module.id} onClick={() => handleModuleSwitch(module.id)} style={{ padding: '12px 16px', borderRadius: '8px', marginBottom: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: activeId === module.id ? '700' : '500', backgroundColor: activeId === module.id ? currentColors.accentBg : 'transparent', color: activeId === module.id ? currentColors.accent : currentColors.subtext, transition: '0.2s cubic-bezier(0.4, 0, 0.2, 1)' }}>
+                  {module.title}
                 </div>
               ))}
             </div>
@@ -233,70 +304,64 @@ function App() {
         </nav>
       </aside>
 
-      {/* MAIN CONTENT AREA */}
-      <main style={{ flex: 1, display: 'flex' }}>
-        <div style={{ width: contentWidth, padding: '60px 50px', overflowY: 'auto', borderRight: `1px solid ${colors.border}`, position: 'relative' }}>
+      <main style={{ flex: 1, minWidth: 0, minHeight: 0, height: '100vh', display: 'flex', overflow: 'hidden' }}>
+        <div ref={lessonPanelRef} onWheelCapture={handleLessonWheel} style={{ flex: `0 0 ${contentWidth}px`, width: contentWidth, height: '100vh', minHeight: 0, padding: '60px 50px', overflowY: 'auto', overflowX: 'hidden', overscrollBehavior: 'contain', WebkitOverflowScrolling: 'touch', borderRight: `1px solid ${currentColors.border}`, position: 'relative' }}>
           <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '40px' }}>
             <div>
-              <span style={{ fontSize: '12px', fontWeight: '800', color: colors.accent, textTransform: 'uppercase', letterSpacing: '1px' }}>Lesson {activeModule?.id}</span>
-              <h1 style={{ fontSize: '32px', fontWeight: '800', letterSpacing: '-1.5px', margin: '4px 0 0' }}>{activeModule?.title}</h1>
+              <span style={{ fontSize: '12px', fontWeight: '800', color: currentColors.accent, textTransform: 'uppercase', letterSpacing: '1px' }}>Lesson {activeModule?.id}</span>
+              <h1 style={{ fontSize: '32px', fontWeight: '800', letterSpacing: 0, margin: '4px 0 0' }}>{activeModule?.title}</h1>
+              {activeModule?.bookSection && (
+                <p style={{ margin: '10px 0 0', color: currentColors.subtext, fontSize: '12px', fontWeight: '700', letterSpacing: '0.4px' }}>
+                  Book section: {activeModule.bookSection}
+                </p>
+              )}
             </div>
             <div style={{ display: 'flex', gap: '8px' }}>
-              <button onClick={toggleTheme} style={{ width: '42px', height: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: colors.taskBg, border: `1px solid ${colors.border}`, borderRadius: '12px', cursor: 'pointer', fontSize: '18px', transition: '0.2s' }}>
-                {theme === 'dark' ? '☀️' : '🌙'}
+              <button onClick={toggleTheme} style={{ minWidth: '64px', height: '42px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: currentColors.sidebar, border: `1px solid ${currentColors.border}`, borderRadius: '8px', cursor: 'pointer', fontSize: '11px', fontWeight: '800', color: currentColors.text, transition: '0.2s' }}>
+                {theme === 'dark' ? 'LIGHT' : 'DARK'}
               </button>
-              <button onClick={() => startEmulator(activeId)} style={{ background: colors.taskBg, color: colors.text, padding: '0 20px', borderRadius: '12px', border: `1px solid ${colors.border}`, cursor: 'pointer', fontSize: '13px', fontWeight: '700', transition: '0.2s' }}>
+              <button onClick={() => startEmulator(activeId)} style={{ background: currentColors.sidebar, color: currentColors.text, padding: '0 20px', borderRadius: '8px', border: `1px solid ${currentColors.border}`, cursor: 'pointer', fontSize: '13px', fontWeight: '700', transition: '0.2s' }}>
                 RESET
               </button>
             </div>
           </header>
 
-          <article style={{ color: colors.subtext, lineHeight: '1.8', fontSize: '16px', marginBottom: '40px' }}>
+          <article style={{ color: currentColors.subtext, lineHeight: '1.8', fontSize: '16px', marginBottom: '40px' }}>
             <Markdown>{activeModule?.content || ''}</Markdown>
           </article>
 
           <section style={{ marginTop: '50px' }}>
-            <h3 style={{ fontSize: '12px', fontWeight: '800', color: colors.subtext, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '16px' }}>Görevler</h3>
+            <h3 style={{ fontSize: '12px', fontWeight: '800', color: currentColors.subtext, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '16px' }}>Tasks</h3>
             {activeModule?.tasks.map(task => (
-              <div key={task.id} style={{ padding: '18px 24px', background: task.completed ? 'transparent' : colors.taskBg, borderRadius: '16px', border: `1px solid ${task.completed ? colors.success : colors.border}`, display: 'flex', gap: '16px', marginBottom: '12px', alignItems: 'center', opacity: task.completed ? 0.7 : 1, transition: '0.4s cubic-bezier(0.4, 0, 0.2, 1)' }}>
-                <div style={{ width: '24px', height: '24px', borderRadius: '8px', backgroundColor: task.completed ? colors.success : `${colors.accent}15`, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: '0.3s' }}>
-                  {task.completed && <span style={{ color: '#fff', fontSize: '14px', fontWeight: 'bold' }}>✓</span>}
+              <div key={task.id} className={task.completed ? 'task-completed' : ''} style={{ padding: '18px 24px', background: task.completed ? 'transparent' : currentColors.sidebar, borderRadius: '8px', border: `1px solid ${task.completed ? '#10b981' : currentColors.border}`, display: 'flex', gap: '16px', marginBottom: '12px', alignItems: 'center', opacity: task.completed ? 0.7 : 1, transition: '0.4s cubic-bezier(0.4, 0, 0.2, 1)' }}>
+                <div style={{ width: '24px', height: '24px', borderRadius: '6px', backgroundColor: task.completed ? '#10b981' : currentColors.accentBg, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: '0.3s' }}>
+                  {task.completed && <span style={{ color: '#fff', fontSize: '14px', fontWeight: 'bold' }}>{'\u2713'}</span>}
                 </div>
-                <span style={{ fontSize: '14px', fontWeight: '600', color: task.completed ? colors.subtext : colors.text, textDecoration: task.completed ? 'line-through' : 'none' }}>{task.text}</span>
+                <span style={{ fontSize: '14px', fontWeight: '600', color: task.completed ? currentColors.subtext : currentColors.text, textDecoration: task.completed ? 'line-through' : 'none' }}>{task.text}</span>
               </div>
             ))}
-            {allTasksCompleted && nextModule && (
-              <button onClick={() => handleModuleSwitch(nextModule.id)} style={{ marginTop: '30px', width: '100%', padding: '20px', backgroundColor: colors.accent, color: '#fff', border: 'none', borderRadius: '16px', cursor: 'pointer', fontWeight: '800', fontSize: '16px', boxShadow: `0 20px 40px -10px ${colors.accent}40`, transition: '0.3s' }}>
-                Sonraki Modüle Geç ➔
-              </button>
-            )}
           </section>
         </div>
 
-        <div onMouseDown={startResizing} style={{ width: '4px', cursor: 'col-resize', background: 'transparent', zIndex: 10 }} />
+        <div onMouseDown={startResizing} style={{ width: '4px', cursor: 'col-resize', background: 'transparent' }} />
 
-        {/* TERMINAL AREA */}
-        <div style={{ flex: 1, padding: '40px', backgroundColor: colors.termOuter, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: '0.3s', position: 'relative' }}>
+        <div style={{ flex: '1 1 auto', minWidth: 0, minHeight: 0, padding: '40px', backgroundColor: currentColors.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: '0.3s', position: 'relative', overflow: 'hidden' }}>
           {!isSystemReady && (
             <div style={{ position: 'absolute', zIndex: 10, textAlign: 'center' }}>
-              <div className="spinner" style={{ width: '40px', height: '40px', border: `4px solid ${colors.accent}20`, borderTop: `4px solid ${colors.accent}`, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 15px' }} />
-              <p style={{ fontSize: '11px', fontWeight: '800', color: colors.subtext, letterSpacing: '1px' }}>KERNEL LOADING...</p>
+              <div className="spinner" style={{ width: '40px', height: '40px', border: `4px solid ${currentColors.accentBg}`, borderTop: `4px solid ${currentColors.accent}`, borderRadius: '50%', animation: 'spin 1s linear infinite', margin: '0 auto 15px' }} />
+              <p style={{ fontSize: '11px', fontWeight: '800', color: currentColors.subtext, letterSpacing: '1px' }}>BOOTING LAB...</p>
             </div>
           )}
-          <div style={{ width: '100%', height: '100%', maxWidth: '960px', maxHeight: '640px', boxShadow: theme === 'light' ? '0 30px 60px -12px rgba(0,0,0,0.15)' : 'none', borderRadius: '20px', overflow: 'hidden', backgroundColor: '#000', opacity: isSystemReady ? 1 : 0.4, transition: 'opacity 0.5s' }}>
-             <TerminalWindow terminalRef={terminalRef} isRunning={true} />
+          <div style={{ width: '100%', height: '100%', maxWidth: '960px', maxHeight: '640px', borderRadius: '12px', overflow: 'hidden', backgroundColor: '#000', opacity: isSystemReady ? 1 : 0.4, transition: 'opacity 0.5s' }}>
+            <TerminalWindow terminalRef={terminalRef} isRunning={true} />
           </div>
         </div>
       </main>
 
-      {/* GLOBAL STYLES & ANIMATIONS */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
         .cursor-blink { display: inline-block; animation: blink-animation 1s steps(2, start) infinite; }
         @keyframes blink-animation { to { visibility: hidden; } }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-thumb { background: ${colors.border}; border-radius: 10px; }
       `}</style>
     </div>
   );
