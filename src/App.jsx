@@ -4,6 +4,7 @@ import { V86 } from 'v86';
 import Markdown from 'markdown-to-jsx';
 import { modules as initialSections } from './data/modules';
 import TerminalWindow from './components/TerminalWindow';
+import { applyCommandToDirectoryState, createDirectoryState, isTaskComplete } from './lib/taskValidation';
 import 'xterm/css/xterm.css';
 
 function App() {
@@ -14,7 +15,10 @@ function App() {
   const isSettingUpRef = useRef(false);
   const keyboardBuffer = useRef('');
   const lastRealCommand = useRef('');
+  const commandSerial = useRef(0);
+  const processedCommandSerial = useRef(0);
   const screenBuffer = useRef('');
+  const directoryState = useRef(createDirectoryState());
 
   const [theme, setTheme] = useState('dark');
   const [isSystemReady, setIsSystemReady] = useState(false);
@@ -39,6 +43,10 @@ function App() {
       .join('');
   }, []);
 
+  const updateTrackedDirectory = useCallback((cmd, cleanScreen = '') => {
+    directoryState.current = applyCommandToDirectoryState(cmd, directoryState.current, cleanScreen);
+  }, []);
+
   const executeCommand = useCallback(async (cmd) => {
     if (!emulatorRef.current) return;
 
@@ -50,16 +58,18 @@ function App() {
           const lastPart = getCleanScreen().slice(-20);
           if (lastPart.includes('$') || lastPart.includes('#') || lastPart.includes('~')) {
             clearInterval(check);
+            updateTrackedDirectory(cmd, getCleanScreen());
             resolve();
           }
           if (++attempts > 20) {
             clearInterval(check);
+            updateTrackedDirectory(cmd, getCleanScreen());
             resolve();
           }
         }, 100);
       }, 100);
     });
-  }, [getCleanScreen]);
+  }, [getCleanScreen, updateTrackedDirectory]);
 
   const startEmulator = useCallback(async (moduleId) => {
     if (isSettingUpRef.current) return;
@@ -73,6 +83,9 @@ function App() {
     screenBuffer.current = '';
     keyboardBuffer.current = '';
     lastRealCommand.current = '';
+    commandSerial.current = 0;
+    processedCommandSerial.current = 0;
+    directoryState.current = createDirectoryState();
 
     const v86Config = {
       wasm_path: '/bin/v86.wasm',
@@ -109,7 +122,10 @@ function App() {
           term.onData(data => {
             if (data === '\r') {
               const cmd = keyboardBuffer.current.trim();
-              if (cmd) lastRealCommand.current = cmd;
+              if (cmd) {
+                lastRealCommand.current = cmd;
+                commandSerial.current += 1;
+              }
               keyboardBuffer.current = '';
             } else if (data === '\u007f') {
               keyboardBuffer.current = keyboardBuffer.current.slice(0, -1);
@@ -169,6 +185,12 @@ function App() {
       if (!isSystemReady) return;
       const submitted = lastRealCommand.current.toLowerCase();
       const cleanScreen = getCleanScreen().toLowerCase();
+      const hasNewCommand = processedCommandSerial.current !== commandSerial.current;
+
+      if (hasNewCommand) {
+        updateTrackedDirectory(lastRealCommand.current, cleanScreen);
+        processedCommandSerial.current = commandSerial.current;
+      }
 
       setSections(prev => {
         const newSections = JSON.parse(JSON.stringify(prev));
@@ -180,11 +202,13 @@ function App() {
               const taskIdx = module.tasks.findIndex(task => !task.completed);
               if (taskIdx !== -1) {
                 const task = module.tasks[taskIdx];
-                const trigger = task.trigger.toLowerCase().trim();
                 let success = false;
 
-                if (task.checkType === 'input' && submitted === trigger) success = true;
-                else if (task.checkType === 'output' && cleanScreen.includes(trigger)) success = true;
+                success = isTaskComplete(task, {
+                  submittedCommand: submitted,
+                  cleanScreen,
+                  cwd: directoryState.current.cwd,
+                });
 
                 if (success) {
                   module.tasks[taskIdx].completed = true;
@@ -201,7 +225,7 @@ function App() {
     }, 400);
 
     return () => clearInterval(scan);
-  }, [activeId, getCleanScreen, isSystemReady]);
+  }, [activeId, getCleanScreen, isSystemReady, updateTrackedDirectory]);
 
   const handleModuleSwitch = (id) => {
     if (isSystemReady && id !== activeId) setActiveId(id);
